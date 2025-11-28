@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.log
+.DS_Store
+.idea/
+.vscode/
+# Локальные конфиги с паролями (никогда не коммитить!)
+config_local.yaml
+.env

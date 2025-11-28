@@ -1,0 +1,12 @@
+# Infra & SSH
+paramiko>=3.4.0
+requests>=2.31.0
+proxmoxer>=2.0.0
+
+# Testing
+pytest>=8.0.0
+pyyaml>=6.0.1
+
+# GUI Automation (later usage)
+# dogtail (system package usually, but listed for ref)
+
