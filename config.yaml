@@ -1,0 +1,19 @@
+# config.yaml
+default_node: "r"
+
+nodes:
+  r:
+    host: "10.33.33.15"
+    user: "root"
+    key_path: "/home/bk/.ssh/id_ed25519_vm101"
+  
+  pve9:
+    host: "10.33.33.2"
+    user: "root"
+    key_path: "/home/bk/.ssh/id_ed25519_vm101"
+
+# Параметры по умолчанию для деплоя
+deploy:
+  memory: 8192
+  cpu: "host"
+
