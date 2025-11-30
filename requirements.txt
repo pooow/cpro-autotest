@@ -6,6 +6,7 @@ proxmoxer>=2.0.0
 # Testing
 pytest>=8.0.0
 pyyaml>=6.0.1
+coloredlogs>=15.0
 
 # GUI Automation (later usage)
 # dogtail (system package usually, but listed for ref)
