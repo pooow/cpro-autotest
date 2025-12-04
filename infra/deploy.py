@@ -5,20 +5,18 @@
 Основные возможности:
 - Поддержка нескольких узлов (Nodes) через config.yaml.
 - Клонирование из шаблона (Template) + снапшота.
-- Автоматическое удаление старой ВМ (Idempotency) с интерактивным подтверждением или флагом --force.
-- Развертывание в RAM-диск (tmpfs) для максимальной скорости тестов.
+- Автоматическое удаление старой ВМ (Idempotency).
+- Развертывание в RAM-диск (tmpfs).
 - Ожидание получения IP-адреса через QEMU Guest Agent.
-- Цветной вывод логов (coloredlogs).
+- Корректная обработка прерывания по Ctrl+C.
 
 Автор: pooow (с помощью AI)
 Дата: Декабрь 2025
 """
 
 import paramiko
-import time
 import argparse
 import sys
-import json
 import logging
 
 # Пытаемся импортировать coloredlogs для красивого вывода
@@ -27,8 +25,9 @@ try:
 except ImportError:
     coloredlogs = None
 
-# Общий модуль конфигурации (DRY)
+# Импорты из наших модулей (Framework)
 from infra.config import load_config, get_node_params
+from infra.ssh_utils import execute_ssh_command, wait_for_ip
 
 
 # -----------------------------------------------------------------------------
@@ -40,121 +39,19 @@ logger = logging.getLogger("deploy")
 
 def setup_logging(level: str = "INFO") -> None:
     """
-    Настраивает формат и уровень логирования.
-    Если доступен coloredlogs, использует его для цветного вывода.
+    Настраивает глобальное логирование для всего приложения.
     """
     log_fmt = "%(asctime)s - %(levelname)s - %(message)s"
+    
     if coloredlogs:
-        coloredlogs.install(level=level, fmt=log_fmt, logger=logger)
+        # Настраиваем root logger (без аргумента logger), чтобы захватить ssh_utils и другие модули
+        coloredlogs.install(level=level, fmt=log_fmt)
     else:
         logging.basicConfig(level=level, format=log_fmt)
+        logging.getLogger().setLevel(level) # Убеждаемся, что root logger имеет нужный уровень
         logger.warning(
             "Совет: установите 'coloredlogs' для цветного вывода (pip install coloredlogs)"
         )
-
-
-# -----------------------------------------------------------------------------
-# Вспомогательные функции
-# -----------------------------------------------------------------------------
-
-def execute_ssh_command(
-    client: paramiko.SSHClient,
-    command: str,
-    dry_run: bool = False,
-    print_output: bool = True,
-    ignore_errors: bool = False,
-) -> str:
-    """
-    Выполняет SSH команду на удаленном сервере.
-
-    :param client: Активный SSH клиент paramiko.
-    :param command: Строка команды (bash).
-    :param dry_run: Если True, команда не выполняется, только логируется.
-    :param print_output: Если True, вывод команды (stdout) пишется в лог INFO.
-    :param ignore_errors: Если True, ошибки (exit code != 0) не выбрасывают
-                          исключение (но логируются на уровне DEBUG).
-    :return: Строка stdout (обрезанная от пробелов).
-    """
-    if dry_run:
-        logger.warning(f"[DRY-RUN] Would execute: {command}")
-        return "MOCK_OUTPUT_JSON"
-
-    logger.info(f"Executing: {command}")
-    stdin, stdout, stderr = client.exec_command(command)
-
-    out_str = stdout.read().decode().strip()
-    err_str = stderr.read().decode().strip()
-    exit_status = stdout.channel.recv_exit_status()
-
-    if print_output and out_str:
-        logger.info(f"--- STDOUT ---\n{out_str}\n--------------")
-
-    if exit_status != 0:
-        if ignore_errors:
-            logger.debug(
-                f"Command failed (expected/ignored). Exit: {exit_status}. Error: {err_str}"
-            )
-        else:
-            logger.error(f"Command failed (Exit: {exit_status}): {command}")
-            if err_str:
-                logger.error(f"--- STDERR ---\n{err_str}\n--------------")
-            raise Exception(f"SSH Command failed: {err_str}")
-
-    return out_str
-
-
-def wait_for_ip(
-    client: paramiko.SSHClient,
-    vm_id: int,
-    dry_run: bool = False,
-    timeout: int = 60,
-) -> str | None:
-    """
-    Ожидает появления IP-адреса у ВМ через QEMU Guest Agent.
-
-    :param client: SSH клиент.
-    :param vm_id: ID виртуальной машины.
-    :param timeout: Максимальное время ожидания в секундах.
-    :return: IP адрес (str) или None, если не найден.
-    """
-    logger.info(f"⏳ Waiting for IP address (Max {timeout}s)...")
-    start_time = time.time()
-
-    while time.time() - start_time < timeout:
-        if dry_run:
-            return "10.DRY.RUN.IP"
-
-        try:
-            json_out = execute_ssh_command(
-                client,
-                f"qm guest cmd {vm_id} network-get-interfaces",
-                print_output=False,
-                ignore_errors=True,
-            )
-
-            if not json_out:
-                time.sleep(3)
-                continue
-
-            data = json.loads(json_out)
-
-            for iface in data:
-                if iface.get("name") == "lo":
-                    continue
-                for addr in iface.get("ip-addresses", []):
-                    if addr["ip-address-type"] == "ipv4":
-                        ip = addr["ip-address"]
-                        if ip.startswith("10."):
-                            logger.info(f"✅ IP FOUND: {ip}")
-                            return ip
-        except Exception:
-            # Любая ошибка парсинга или SSH — просто пробуем снова
-            pass
-
-        time.sleep(3)
-
-    logger.warning("⚠️  Timeout waiting for IP. Guest Agent might not be running.")
-    return None
 
 
 # -----------------------------------------------------------------------------
@@ -170,9 +67,7 @@ def deploy_vm(
     dry_run: bool = False,
     force: bool = False,
 ) -> dict:
-    """
-    Основная функция оркестрации развертывания ВМ.
-    """
+    # ... (содержимое функции deploy_vm не изменилось, оставляем как было)
     # 1. Инициализация: конфиг + логирование
     config = load_config()
     setup_logging(config.get("logging", {}).get("level", "INFO"))
@@ -337,12 +232,17 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    deploy_vm(
-        args.tmpl_id,
-        args.snap,
-        args.new_id,
-        target_node=args.node,
-        dry_run=args.dry_run,
-        force=args.force,
-    )
+    try:
+        deploy_vm(
+            args.tmpl_id,
+            args.snap,
+            args.new_id,
+            target_node=args.node,
+            dry_run=args.dry_run,
+            force=args.force,
+        )
+    except KeyboardInterrupt:
+        # Перехватываем Ctrl+C и выходим с понятным сообщением
+        print("\n🛑 Operation aborted by user.")
+        sys.exit(1)
 
