@@ -1,7 +1,5 @@
 import pytest
-from unittest.mock import MagicMock
-# В тесте мы уже можем импортировать реальную функцию, 
-# так как infra/proxmox.py будет создан до запуска теста
+from unittest.mock import MagicMock, patch
 from infra.proxmox import check_vm_safety, prepare_storage, cleanup_ram_vms
 
 @pytest.fixture
@@ -14,6 +12,8 @@ def mock_ssh_client():
     stderr.read.return_value = b""
     client.exec_command.return_value = (None, stdout, stderr)
     return client
+
+# Тесты безопасности (Unit tests)
 
 def test_check_vm_safety_safe_vm():
     """Тест безопасной ВМ (все диски в RAM и правильного формата)"""
@@ -43,7 +43,7 @@ scsi0: ram:100/vm-100-root.raw,size=32G
     config2 = """
 scsi0: ram:100/vm-100-disk-0.qcow2
     """
-    # size нет -> unsafe (хотя странный конфиг, но проверка строгая)
+    # size нет -> unsafe (строгая проверка)
     assert check_vm_safety("100", config2, "ram") is False
 
 def test_check_vm_safety_no_disks():
@@ -54,30 +54,54 @@ memory: 1024
     """
     assert check_vm_safety("100", config, "ram") is False
 
-def test_prepare_storage_dry_run(mock_ssh_client):
-    """Проверка вызова prepare_storage (dry-run)"""
+
+# Интеграционные тесты (с патчем execute_ssh_command)
+
+@patch("infra.proxmox.execute_ssh_command")
+def test_prepare_storage_dry_run(mock_execute, mock_ssh_client):
+    """
+    Проверка вызова prepare_storage (dry-run).
+    В dry-run проверка (grep) пропускается, сразу идут команды монтирования.
+    """
+    mock_execute.return_value = "" 
+
     prepare_storage(
         mock_ssh_client, 
         storage_path="/mnt/ram_test", 
         ram_size_gb=16, 
         dry_run=True
     )
-    # Проверяем, что мок вызывался (достаточно для интеграционного теста)
-    assert mock_ssh_client.exec_command.called
+    
+    # Проверяем, что execute_ssh_command вызывался
+    assert mock_execute.called
+    
+    # Проверяем конкретные команды (в dry-run мы сразу монтируем)
+    calls = [args[0][1] for args in mock_execute.call_args_list]
+    
+    # mkdir для точки монтирования
+    assert "mkdir -p /mnt/ram_test" in calls
+    # Само монтирование
+    assert "mount -t tmpfs -o size=16G tmpfs /mnt/ram_test" in calls
+    # Создание структуры папок
+    assert any("mkdir -p /mnt/ram_test/{images" in c for c in calls)
 
-def test_cleanup_ram_vms_dry_run(mock_ssh_client):
-    """Проверка вызова cleanup_ram_vms (dry-run)"""
-    # Эмулируем, что ls нашел конфиг
-    mock_ssh_client.exec_command.return_value[1].read.side_effect = [
-        b"/etc/pve/qemu-server/100.conf\n", # ls
-        # cat конфига (безопасный)
-        b"scsi0: ram:100/vm-100-disk-0.qcow2,size=10G\n", 
-        b"", b"" # для stop/destroy
+@patch("infra.proxmox.execute_ssh_command")
+def test_cleanup_ram_vms_dry_run(mock_execute, mock_ssh_client):
+    """
+    Проверка логики очистки.
+    """
+    # Настраиваем side_effect для имитации ответов команд
+    mock_execute.side_effect = [
+        "/etc/pve/qemu-server/100.conf\n", # 1. ls
+        "scsi0: ram:100/vm-100-disk-0.qcow2,size=10G\n", # 2. cat 100.conf (SAFE)
+        "", # 3. stop (успех)
+        "", # 4. destroy (успех)
     ]
     
     cleanup_ram_vms(mock_ssh_client, storage_name="ram", dry_run=True)
     
-    # Проверяем, что были попытки destroy (так как конфиг безопасный)
-    # Можно проверить аргументы вызова, но для начала хватит факта вызова
-    assert mock_ssh_client.exec_command.call_count >= 2
+    # Проверяем, что были вызовы stop и destroy
+    calls = [args[0][1] for args in mock_execute.call_args_list]
+    assert "qm stop 100 --skiplock" in calls
+    assert "qm destroy 100 --skiplock --purge" in calls
 
