@@ -28,7 +28,7 @@ def load_config(config_path=CONFIG_PATH):
             return yaml.safe_load(f) or {}
     except Exception as e:
         logger.error(f"Error loading config: {e}")
-        return {} # Возвращаем пустой словарь, чтобы не валить импорты, если конфиг бит
+        return {}
 
 def get_node_params(node_name, config=None):
     """
@@ -48,6 +48,8 @@ def get_node_params(node_name, config=None):
         "host": node_conf.get("host"),
         "user": node_conf.get("user", "root"),
         "key": os.path.expanduser(node_conf.get("key_path", "~/.ssh/id_rsa")),
-        "storage": node_conf.get("storage", "ram")
+        "storage": node_conf.get("storage", "ram"),
+        # Добавлено для поддержки prepare_storage
+        "storage_path": node_conf.get("storage_path", "/mnt/ramdisk_stor") 
     }
 

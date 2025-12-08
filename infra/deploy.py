@@ -6,7 +6,7 @@
 - Поддержка нескольких узлов (Nodes) через config.yaml.
 - Клонирование из шаблона (Template) + снапшота.
 - Автоматическое удаление старой ВМ (Idempotency).
-- Развертывание в RAM-диск (tmpfs).
+- Развертывание в RAM-диск (tmpfs) с использованием infra.proxmox.
 - Ожидание получения IP-адреса через QEMU Guest Agent.
 - Корректная обработка прерывания по Ctrl+C.
 
@@ -28,6 +28,8 @@ except ImportError:
 # Импорты из наших модулей (Framework)
 from infra.config import load_config, get_node_params
 from infra.ssh_utils import execute_ssh_command, wait_for_ip
+# Новый импорт для работы с хранилищем
+from infra.proxmox import prepare_storage, cleanup_ram_vms
 
 
 # -----------------------------------------------------------------------------
@@ -44,11 +46,10 @@ def setup_logging(level: str = "INFO") -> None:
     log_fmt = "%(asctime)s - %(levelname)s - %(message)s"
     
     if coloredlogs:
-        # Настраиваем root logger (без аргумента logger), чтобы захватить ssh_utils и другие модули
         coloredlogs.install(level=level, fmt=log_fmt)
     else:
         logging.basicConfig(level=level, format=log_fmt)
-        logging.getLogger().setLevel(level) # Убеждаемся, что root logger имеет нужный уровень
+        logging.getLogger().setLevel(level)
         logger.warning(
             "Совет: установите 'coloredlogs' для цветного вывода (pip install coloredlogs)"
         )
@@ -67,7 +68,9 @@ def deploy_vm(
     dry_run: bool = False,
     force: bool = False,
 ) -> dict:
-    # ... (содержимое функции deploy_vm не изменилось, оставляем как было)
+    """
+    Основная функция оркестрации развертывания ВМ.
+    """
     # 1. Инициализация: конфиг + логирование
     config = load_config()
     setup_logging(config.get("logging", {}).get("level", "INFO"))
@@ -81,17 +84,20 @@ def deploy_vm(
         f"NewID={new_vm_id} Node={target_node}"
     )
 
-    # Получаем параметры для выбранного узла из общего модуля конфигурации
+    # Получаем параметры для выбранного узла
     try:
         node_params = get_node_params(target_node, config)
     except ValueError as e:
         logger.critical(str(e))
         sys.exit(1)
 
-    target_storage = node_params["storage"]
+    target_storage = node_params["storage"] # Имя хранилища в Proxmox (напр. ramdisk_stor)
     host_ip = node_params["host"]
     ssh_user = node_params["user"]
     ssh_key = node_params["key"]
+    
+    # Получаем путь монтирования RAM-диска из конфига узла
+    ram_mount_path = node_params.get("storage_path", "/mnt/ramdisk_stor") 
 
     # Параметры ВМ (CLI > config.deploy > default)
     if memory is None:
@@ -119,11 +125,11 @@ def deploy_vm(
         vm_exists = False
         try:
             if not dry_run:
-                # Пробуем получить статус ВМ. Если команды не существует — ВМ нет.
                 execute_ssh_command(
                     client,
                     f"qm status {new_vm_id}",
                     print_output=False,
+                    log_command=False
                 )
                 vm_exists = True
             else:
@@ -143,6 +149,7 @@ def deploy_vm(
                         dry_run=dry_run,
                         print_output=False,
                         ignore_errors=True,
+                        log_command=False
                     )
                 except Exception:
                     pass
@@ -163,19 +170,30 @@ def deploy_vm(
                         dry_run=dry_run,
                         print_output=False,
                         ignore_errors=True,
+                        log_command=False
+                    )
+                    # Уничтожаем ВМ полностью, чтобы освободить диск
+                    execute_ssh_command(
+                        client,
+                        f"qm destroy {new_vm_id} --skiplock --purge",
+                        dry_run=dry_run,
+                        log_command=True
                     )
                 except Exception:
                     pass
 
         # ---------------------------------------------------------
-        # 3. Очистка и подготовка дисков (Purge & Prepare)
+        # 3. Подготовка RAM хранилища (Python instead of Bash)
         # ---------------------------------------------------------
-        setup_cmd = (
-            "bash -ic 'source /root/.bashrc && "
-            "purge_vm_disks && ./ramstor.sh'"
+        # Размер RAM диска можно тоже вынести в конфиг
+        ram_size = config.get("deploy", {}).get("ram_disk_size_gb", 42)
+        
+        prepare_storage(
+            client, 
+            storage_path=ram_mount_path, 
+            ram_size_gb=ram_size, 
+            dry_run=dry_run
         )
-        logger.info("🧹 Cleaning up old disks and preparing RAM storage...")
-        execute_ssh_command(client, setup_cmd, dry_run, print_output=True)
 
         # ---------------------------------------------------------
         # 4. Клонирование ВМ (Clone)
@@ -211,10 +229,6 @@ def deploy_vm(
             logger.debug("SSH connection closed")
 
 
-# -----------------------------------------------------------------------------
-# CLI входная точка
-# -----------------------------------------------------------------------------
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Proxmox VM Automated Deployer")
     parser.add_argument("--tmpl-id", required=True, type=int, help="Template VM ID")
@@ -242,7 +256,6 @@ if __name__ == "__main__":
             force=args.force,
         )
     except KeyboardInterrupt:
-        # Перехватываем Ctrl+C и выходим с понятным сообщением
         print("\n🛑 Operation aborted by user.")
         sys.exit(1)
 
