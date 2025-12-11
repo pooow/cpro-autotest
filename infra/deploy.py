@@ -11,9 +11,9 @@
 - Корректная обработка прерывания по Ctrl+C.
 
 Приоритет настроек (согласно AI_WORKFLOW.md):
-1. CLI аргументы (Высший)
-2. config.yaml
-3. Хардкод запрещен!
+1. CLI аргументы (--ram-size) — Высший
+2. nodes.<node>.ram_disk_size_gb — Специфично для узла
+3. None — tmpfs автоматически использует 50% RAM хоста
 
 Автор: pooow (с помощью AI)
 Дата: Декабрь 2025
@@ -78,7 +78,7 @@ def deploy_vm(
     Основная функция оркестрации развертывания ВМ.
     
     Приоритет параметров:
-    - ram_size: CLI --ram-size > config.deploy.ram_disk_size_gb > ValueError
+    - ram_size: CLI --ram-size > nodes.<node>.ram_disk_size_gb > None (tmpfs auto)
     - storage_path: node_params["storage_path"] (обязательный в config.yaml)
     """
     # 1. Инициализация: конфиг + логирование
@@ -114,17 +114,17 @@ def deploy_vm(
     if memory is None:
         memory = config.get("deploy", {}).get("memory", 8192)
 
-    # Размер RAM-диска: CLI --ram-size > config.deploy.ram_disk_size_gb > ValueError
+    # Размер RAM-диска: CLI --ram-size > nodes.<node>.ram_disk_size_gb > None (tmpfs auto)
     if ram_size is None:
-        ram_size = config.get("deploy", {}).get("ram_disk_size_gb")
+        # Читаем из параметров узла (специфично для узла!)
+        ram_size = node_params.get("ram_disk_size_gb")
+        
+        # Если не задан и в узле - None (tmpfs использует 50% RAM автоматически)
         if ram_size is None:
-            logger.critical(
-                "❌ Параметр 'ram_disk_size_gb' не задан!\n"
-                "   Укажите через:\n"
-                "   1. CLI: --ram-size <GB>\n"
-                "   2. config.yaml: deploy.ram_disk_size_gb"
+            logger.info(
+                f"ℹ️  ram_disk_size_gb не задан для узла '{target_node}'. "
+                f"tmpfs автоматически использует 50% RAM хоста."
             )
-            sys.exit(1)
 
     client: paramiko.SSHClient | None = None
 
@@ -211,7 +211,7 @@ def deploy_vm(
         prepare_storage(
             client, 
             storage_path=ram_mount_path, 
-            ram_size_gb=ram_size, 
+            ram_size_gb=ram_size,  # Может быть None - тогда tmpfs использует дефолт
             dry_run=dry_run
         )
 
@@ -258,7 +258,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ram-size",
         type=int,
-        help="RAM disk size in GB (overrides config.yaml)",
+        help="RAM disk size in GB (overrides config.yaml; if not set, uses node config or tmpfs default)",
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Simulate actions without execution"

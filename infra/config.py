@@ -73,6 +73,9 @@ def get_node_params(node_name, config=None):
         "user": node_conf["user"],
         "key": os.path.expanduser(node_conf["key_path"]),
         "storage": node_conf["storage"],
-        "storage_path": node_conf["storage_path"]
+        "storage_path": node_conf["storage_path"],
+        # ram_disk_size_gb теперь опциональный (специфичен для узла)
+        # Если не указан - возвращаем None (tmpfs использует дефолт 50% RAM)
+        "ram_disk_size_gb": node_conf.get("ram_disk_size_gb")
     }
 

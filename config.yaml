@@ -23,6 +23,8 @@ nodes:
     storage: "ram"
     # Путь монтирования RAM-диска на хосте Proxmox
     storage_path: "/mnt/ram"
+    # Размер RAM-диска в гигабайтах (50% от 64 GB RAM хоста)
+    ram_disk_size_gb: 32
   
   # Второй сервер
   pve9:
@@ -32,12 +34,13 @@ nodes:
     storage: "ramdisk_stor"
     # Путь монтирования RAM-диска на хосте Proxmox
     storage_path: "/mnt/ramdisk_stor"
+    # Размер RAM-диска в гигабайтах (50% от 128 GB RAM хоста)
+    ram_disk_size_gb: 64
 
 # Параметры развертывания ВМ по умолчанию
 deploy:
   memory: 8192
   cpu: "host"
   agent: 1
-  # Размер RAM-диска в гигабайтах (для tmpfs хранилища)
-  ram_disk_size_gb: 50
+  # ram_disk_size_gb удален - теперь специфичен для каждого узла
 
