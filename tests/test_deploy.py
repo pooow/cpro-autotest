@@ -17,16 +17,24 @@ def test_deploy_vm_calls_prepare_storage(
     """
     Проверяем, что deploy_vm вызывает функцию подготовки хранилища (prepare_storage).
     Это гарантирует, что мы избавились от bash-скриптов.
+    
+    ОБНОВЛЕНО: ram_disk_size_gb теперь читается из nodes.<node>, а не из deploy.
     """
     # 1. Настройка моков
-    mock_load.return_value = {"deploy": {"memory": 2048, "ram_disk_size_gb": 42}, "logging": {"level": "DEBUG"}}
+    mock_load.return_value = {
+        "deploy": {"memory": 2048}, 
+        "logging": {"level": "DEBUG"}
+        # ram_disk_size_gb удален из deploy!
+    }
     
+    # ram_disk_size_gb теперь возвращается из get_node_params (специфично для узла)
     mock_get_node.return_value = {
         "host": "1.2.3.4", 
         "user": "root", 
         "key": "key", 
         "storage": "ram",
-        "storage_path": "/mnt/ram_test"
+        "storage_path": "/mnt/ram_test",
+        "ram_disk_size_gb": 42  # ✅ Теперь здесь (из nodes.test_node)
     }
     
     mock_client = MagicMock()
@@ -51,10 +59,10 @@ def test_deploy_vm_calls_prepare_storage(
     # Проверка 1: prepare_storage вызвана 1 раз
     mock_prepare.assert_called_once()
     
-    # Проверка 2: переданы правильные аргументы (из конфига)
+    # Проверка 2: переданы правильные аргументы (из node_params)
     _, kwargs = mock_prepare.call_args
     assert kwargs['storage_path'] == "/mnt/ram_test"
-    assert kwargs['ram_size_gb'] == 42 # из конфига (mock_load)
+    assert kwargs['ram_size_gb'] == 42  # ✅ Теперь из nodes.test_node
 
     # Проверка 3: клонирование запущено
     clone_found = False
