@@ -10,6 +10,11 @@
 - Ожидание получения IP-адреса через QEMU Guest Agent.
 - Корректная обработка прерывания по Ctrl+C.
 
+Приоритет настроек (согласно AI_WORKFLOW.md):
+1. CLI аргументы (Высший)
+2. config.yaml
+3. Хардкод запрещен!
+
 Автор: pooow (с помощью AI)
 Дата: Декабрь 2025
 """
@@ -65,11 +70,16 @@ def deploy_vm(
     new_vm_id: int,
     target_node: str | None = None,
     memory: int | None = None,
+    ram_size: int | None = None,
     dry_run: bool = False,
     force: bool = False,
 ) -> dict:
     """
     Основная функция оркестрации развертывания ВМ.
+    
+    Приоритет параметров:
+    - ram_size: CLI --ram-size > config.deploy.ram_disk_size_gb > ValueError
+    - storage_path: node_params["storage_path"] (обязательный в config.yaml)
     """
     # 1. Инициализация: конфиг + логирование
     config = load_config()
@@ -91,17 +101,30 @@ def deploy_vm(
         logger.critical(str(e))
         sys.exit(1)
 
-    target_storage = node_params["storage"] # Имя хранилища в Proxmox (напр. ramdisk_stor)
+    target_storage = node_params["storage"]  # Имя хранилища в Proxmox (напр. ramdisk_stor)
     host_ip = node_params["host"]
     ssh_user = node_params["user"]
     ssh_key = node_params["key"]
     
     # Получаем путь монтирования RAM-диска из конфига узла
-    ram_mount_path = node_params.get("storage_path", "/mnt/ramdisk_stor") 
+    # Хардкод дефолта запрещен! Если параметр отсутствует - get_node_params() выбросит ValueError
+    ram_mount_path = node_params["storage_path"]
 
     # Параметры ВМ (CLI > config.deploy > default)
     if memory is None:
         memory = config.get("deploy", {}).get("memory", 8192)
+
+    # Размер RAM-диска: CLI --ram-size > config.deploy.ram_disk_size_gb > ValueError
+    if ram_size is None:
+        ram_size = config.get("deploy", {}).get("ram_disk_size_gb")
+        if ram_size is None:
+            logger.critical(
+                "❌ Параметр 'ram_disk_size_gb' не задан!\n"
+                "   Укажите через:\n"
+                "   1. CLI: --ram-size <GB>\n"
+                "   2. config.yaml: deploy.ram_disk_size_gb"
+            )
+            sys.exit(1)
 
     client: paramiko.SSHClient | None = None
 
@@ -185,9 +208,6 @@ def deploy_vm(
         # ---------------------------------------------------------
         # 3. Подготовка RAM хранилища (Python instead of Bash)
         # ---------------------------------------------------------
-        # Размер RAM диска можно тоже вынести в конфиг
-        ram_size = config.get("deploy", {}).get("ram_disk_size_gb", 42)
-        
         prepare_storage(
             client, 
             storage_path=ram_mount_path, 
@@ -236,6 +256,11 @@ if __name__ == "__main__":
     parser.add_argument("--new-id", required=True, type=int, help="New VM ID")
     parser.add_argument("--node", help="Target node name (defined in config.yaml)")
     parser.add_argument(
+        "--ram-size",
+        type=int,
+        help="RAM disk size in GB (overrides config.yaml)",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true", help="Simulate actions without execution"
     )
     parser.add_argument(
@@ -252,6 +277,7 @@ if __name__ == "__main__":
             args.snap,
             args.new_id,
             target_node=args.node,
+            ram_size=args.ram_size,
             dry_run=args.dry_run,
             force=args.force,
         )

@@ -21,6 +21,8 @@ nodes:
     key_path: "/home/bk/.ssh/id_ed25519_vm101"
     # Имя хранилища для временных дисков (tmpfs)
     storage: "ram"
+    # Путь монтирования RAM-диска на хосте Proxmox
+    storage_path: "/mnt/ram"
   
   # Второй сервер
   pve9:
@@ -28,10 +30,14 @@ nodes:
     user: "root"
     key_path: "/home/bk/.ssh/id_ed25519_vm101"
     storage: "ramdisk_stor"
+    # Путь монтирования RAM-диска на хосте Proxmox
+    storage_path: "/mnt/ramdisk_stor"
 
 # Параметры развертывания ВМ по умолчанию
 deploy:
   memory: 8192
   cpu: "host"
   agent: 1
+  # Размер RAM-диска в гигабайтах (для tmpfs хранилища)
+  ram_disk_size_gb: 50
 

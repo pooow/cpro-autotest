@@ -17,8 +17,7 @@ import pytest
 import os
 import ast
 from pathlib import Path
-from unittest.mock import patch
-from infra.config import load_config, get_node_params
+from unittest.mock import patch, mock_open
 
 
 # Список конфигурационных ключей, для которых запрещены дефолты в коде
@@ -42,6 +41,9 @@ class TestConfigNoHardcode:
         """
         Проверяем, что storage_path читается из config.yaml для узла.
         """
+        # Импортируем здесь, чтобы избежать кеширования между тестами
+        from infra.config import load_config, get_node_params
+        
         mock_config = {
             "nodes": {
                 "test_node": {
@@ -54,15 +56,16 @@ class TestConfigNoHardcode:
             }
         }
 
-        with patch('infra.config.load_config', return_value=mock_config):
-            params = get_node_params("test_node", mock_config)
-            assert params["storage_path"] == "/custom/path/stor", \
-                "storage_path должен читаться из конфига узла"
+        params = get_node_params("test_node", mock_config)
+        assert params["storage_path"] == "/custom/path/stor", \
+            "storage_path должен читаться из конфига узла"
 
     def test_storage_path_missing_raises_error(self):
         """
-        Проверяем, что отсутствие storage_path в конфиге узла вызывает ошибку.
+        Проверяем, что отсутствие storage_path в конфиге узла вызывает ValueError.
         """
+        from infra.config import get_node_params
+        
         mock_config = {
             "nodes": {
                 "test_node": {
@@ -75,42 +78,53 @@ class TestConfigNoHardcode:
             }
         }
 
-        with patch('infra.config.load_config', return_value=mock_config):
-            with pytest.raises(KeyError, match="storage_path"):
-                params = get_node_params("test_node", mock_config)
-                # Принудительно обращаемся к ключу
-                _ = params["storage_path"]
+        with pytest.raises(ValueError, match="storage_path"):
+            get_node_params("test_node", mock_config)
 
     def test_ram_disk_size_from_deploy_config(self):
         """
         Проверяем, что ram_disk_size_gb читается из секции deploy в config.yaml.
         """
-        mock_config = {
-            "deploy": {
-                "ram_disk_size_gb": 50
-            }
-        }
-
-        with patch('infra.config.load_config', return_value=mock_config):
-            config = load_config()
-            ram_size = config.get("deploy", {}).get("ram_disk_size_gb")
-            assert ram_size == 50, \
-                "ram_disk_size_gb должен читаться из секции deploy"
+        import yaml
+        from infra.config import CONFIG_PATH
+        
+        mock_yaml = """
+deploy:
+  ram_disk_size_gb: 50
+"""
+        # Патчим чтение файла напрямую
+        with patch('builtins.open', mock_open(read_data=mock_yaml)):
+            with patch('os.path.exists', return_value=True):
+                from infra.config import load_config
+                config = load_config()
+                ram_size = config.get("deploy", {}).get("ram_disk_size_gb")
+                assert ram_size == 50, \
+                    "ram_disk_size_gb должен читаться из секции deploy"
 
     def test_ram_disk_size_missing_returns_none(self):
         """
         Проверяем, что при отсутствии ram_disk_size_gb в конфиге возвращается None.
         Дефолт не должен быть захардкожен в коде!
         """
-        mock_config = {
-            "deploy": {}
-        }
-
-        with patch('infra.config.load_config', return_value=mock_config):
-            config = load_config()
-            ram_size = config.get("deploy", {}).get("ram_disk_size_gb")
-            assert ram_size is None, \
-                "При отсутствии ram_disk_size_gb должен возвращаться None (без хардкода)"
+        import yaml
+        
+        # YAML без ram_disk_size_gb
+        mock_yaml = """
+deploy:
+  memory: 8192
+"""
+        # Патчим чтение файла напрямую
+        with patch('builtins.open', mock_open(read_data=mock_yaml)):
+            with patch('os.path.exists', return_value=True):
+                # Импортируем свежую копию модуля
+                import importlib
+                import infra.config
+                importlib.reload(infra.config)
+                
+                config = infra.config.load_config()
+                ram_size = config.get("deploy", {}).get("ram_disk_size_gb")
+                assert ram_size is None, \
+                    "При отсутствии ram_disk_size_gb должен возвращаться None (без хардкода)"
 
     def test_no_hardcoded_defaults_in_entire_project(self):
         """
@@ -208,6 +222,8 @@ class TestConfigNoHardcode:
         - deploy.ram_disk_size_gb
         - nodes.<каждый узел>.storage_path
         """
+        from infra.config import load_config
+        
         config = load_config()
         
         # Проверка deploy.ram_disk_size_gb

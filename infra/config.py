@@ -1,6 +1,9 @@
 """
 Модуль для работы с конфигурацией проекта.
 Обеспечивает загрузку config.yaml и доступ к параметрам узлов.
+
+Правило: Все настройки должны быть явно указаны в config.yaml.
+Хардкод дефолтов запрещен согласно AI_WORKFLOW.md.
 """
 import os
 import yaml
@@ -34,6 +37,14 @@ def get_node_params(node_name, config=None):
     """
     Возвращает параметры подключения для узла.
     Если config не передан, загружает его заново.
+    
+    Все параметры должны быть явно указаны в config.yaml!
+    Отсутствие обязательных параметров приводит к ValueError.
+    
+    :param node_name: Имя узла из config.yaml (например, 'r' или 'pve9')
+    :param config: Опциональный словарь конфигурации
+    :return: Словарь с параметрами узла
+    :raises ValueError: Если узел не найден или отсутствуют обязательные параметры
     """
     if config is None:
         config = load_config()
@@ -42,14 +53,26 @@ def get_node_params(node_name, config=None):
     node_conf = nodes.get(node_name)
     
     if not node_conf:
-        raise ValueError(f"Node '{node_name}' not found in config")
+        raise ValueError(
+            f"Node '{node_name}' not found in config.yaml. "
+            f"Available nodes: {list(nodes.keys())}"
+        )
+    
+    # Проверяем обязательные параметры
+    required_params = ["host", "user", "key_path", "storage", "storage_path"]
+    missing = [p for p in required_params if p not in node_conf]
+    
+    if missing:
+        raise ValueError(
+            f"Node '{node_name}' missing required parameters: {missing}. "
+            f"Please add them to config.yaml"
+        )
     
     return {
-        "host": node_conf.get("host"),
-        "user": node_conf.get("user", "root"),
-        "key": os.path.expanduser(node_conf.get("key_path", "~/.ssh/id_rsa")),
-        "storage": node_conf.get("storage", "ram"),
-        # Добавлено для поддержки prepare_storage
-        "storage_path": node_conf.get("storage_path", "/mnt/ramdisk_stor") 
+        "host": node_conf["host"],
+        "user": node_conf["user"],
+        "key": os.path.expanduser(node_conf["key_path"]),
+        "storage": node_conf["storage"],
+        "storage_path": node_conf["storage_path"]
     }
 
