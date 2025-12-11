@@ -41,8 +41,7 @@ class TestConfigNoHardcode:
         """
         Проверяем, что storage_path читается из config.yaml для узла.
         """
-        # Импортируем здесь, чтобы избежать кеширования между тестами
-        from infra.config import load_config, get_node_params
+        from infra.config import get_node_params
         
         mock_config = {
             "nodes": {
@@ -51,7 +50,8 @@ class TestConfigNoHardcode:
                     "user": "root",
                     "key_path": "~/.ssh/id_rsa",
                     "storage": "ram",
-                    "storage_path": "/custom/path/stor"
+                    "storage_path": "/custom/path/stor",
+                    "ram_disk_size_gb": 32
                 }
             }
         }
@@ -72,7 +72,8 @@ class TestConfigNoHardcode:
                     "host": "10.0.0.1",
                     "user": "root",
                     "key_path": "~/.ssh/id_rsa",
-                    "storage": "ram"
+                    "storage": "ram",
+                    "ram_disk_size_gb": 32
                     # storage_path отсутствует!
                 }
             }
@@ -81,50 +82,94 @@ class TestConfigNoHardcode:
         with pytest.raises(ValueError, match="storage_path"):
             get_node_params("test_node", mock_config)
 
-    def test_ram_disk_size_from_deploy_config(self):
+    def test_ram_disk_size_from_node_config(self):
         """
-        Проверяем, что ram_disk_size_gb читается из секции deploy в config.yaml.
-        """
-        import yaml
-        from infra.config import CONFIG_PATH
+        НОВЫЙ ТЕСТ: Проверяем, что ram_disk_size_gb читается из nodes.<node>.
         
-        mock_yaml = """
-deploy:
-  ram_disk_size_gb: 50
-"""
-        # Патчим чтение файла напрямую
-        with patch('builtins.open', mock_open(read_data=mock_yaml)):
-            with patch('os.path.exists', return_value=True):
-                from infra.config import load_config
-                config = load_config()
-                ram_size = config.get("deploy", {}).get("ram_disk_size_gb")
-                assert ram_size == 50, \
-                    "ram_disk_size_gb должен читаться из секции deploy"
+        ram_disk_size_gb теперь специфичен для узла (разное количество RAM),
+        а не глобальный параметр в deploy.
+        """
+        from infra.config import get_node_params
+        
+        mock_config = {
+            "nodes": {
+                "r": {
+                    "host": "10.33.33.15",
+                    "user": "root",
+                    "key_path": "~/.ssh/id_rsa",
+                    "storage": "ram",
+                    "storage_path": "/mnt/ramdisk/stor",
+                    "ram_disk_size_gb": 32  # 50% от 64 GB RAM
+                },
+                "pve9": {
+                    "host": "10.33.33.2",
+                    "user": "root",
+                    "key_path": "~/.ssh/id_rsa",
+                    "storage": "ramdisk_stor",
+                    "storage_path": "/mnt/ramdisk_stor",
+                    "ram_disk_size_gb": 64  # 50% от 128 GB RAM
+                }
+            }
+        }
+
+        # Проверяем узел r (64 GB RAM)
+        params_r = get_node_params("r", mock_config)
+        assert params_r["ram_disk_size_gb"] == 32, \
+            "ram_disk_size_gb для узла 'r' должен быть 32 GB"
+
+        # Проверяем узел pve9 (128 GB RAM)
+        params_pve9 = get_node_params("pve9", mock_config)
+        assert params_pve9["ram_disk_size_gb"] == 64, \
+            "ram_disk_size_gb для узла 'pve9' должен быть 64 GB"
 
     def test_ram_disk_size_missing_returns_none(self):
         """
-        Проверяем, что при отсутствии ram_disk_size_gb в конфиге возвращается None.
-        Дефолт не должен быть захардкожен в коде!
+        Проверяем, что при отсутствии ram_disk_size_gb в конфиге узла возвращается None.
+        
+        None означает: tmpfs автоматически использует 50% RAM хоста.
+        """
+        from infra.config import get_node_params
+        
+        mock_config = {
+            "nodes": {
+                "test_node": {
+                    "host": "10.0.0.1",
+                    "user": "root",
+                    "key_path": "~/.ssh/id_rsa",
+                    "storage": "ram",
+                    "storage_path": "/mnt/ramdisk/stor"
+                    # ram_disk_size_gb отсутствует!
+                }
+            }
+        }
+
+        params = get_node_params("test_node", mock_config)
+        ram_size = params.get("ram_disk_size_gb")
+        assert ram_size is None, \
+            "При отсутствии ram_disk_size_gb должен возвращаться None (tmpfs auto)"
+
+    def test_deploy_ram_disk_size_not_used(self):
+        """
+        НОВЫЙ ТЕСТ: Проверяем, что deploy.ram_disk_size_gb больше НЕ используется.
+        
+        Старая структура (глобальный параметр) удалена.
+        Теперь ram_disk_size_gb специфичен для узла.
         """
         import yaml
         
-        # YAML без ram_disk_size_gb
-        mock_yaml = """
-deploy:
-  memory: 8192
-"""
-        # Патчим чтение файла напрямую
-        with patch('builtins.open', mock_open(read_data=mock_yaml)):
-            with patch('os.path.exists', return_value=True):
-                # Импортируем свежую копию модуля
-                import importlib
-                import infra.config
-                importlib.reload(infra.config)
-                
-                config = infra.config.load_config()
-                ram_size = config.get("deploy", {}).get("ram_disk_size_gb")
-                assert ram_size is None, \
-                    "При отсутствии ram_disk_size_gb должен возвращаться None (без хардкода)"
+        # Загружаем реальный config.yaml
+        from infra.config import CONFIG_PATH
+        
+        if not os.path.exists(CONFIG_PATH):
+            pytest.skip("config.yaml не найден")
+        
+        with open(CONFIG_PATH, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        # Проверяем, что deploy.ram_disk_size_gb отсутствует
+        deploy_section = config.get("deploy", {})
+        assert "ram_disk_size_gb" not in deploy_section, \
+            "deploy.ram_disk_size_gb должен быть удален! Теперь параметр специфичен для узла."
 
     def test_no_hardcoded_defaults_in_entire_project(self):
         """
@@ -218,25 +263,31 @@ deploy:
         """
         Проверяем, что config.yaml содержит все обязательные ключи.
         
-        Обязательные секции:
-        - deploy.ram_disk_size_gb
+        ОБНОВЛЕНО: ram_disk_size_gb теперь опциональный (для узлов).
+        Обязательные параметры:
         - nodes.<каждый узел>.storage_path
+        - nodes.<каждый узел>.host, user, key_path, storage
         """
         from infra.config import load_config
         
         config = load_config()
         
-        # Проверка deploy.ram_disk_size_gb
-        assert "deploy" in config, "Отсутствует секция 'deploy' в config.yaml"
-        assert "ram_disk_size_gb" in config["deploy"], \
-            "Отсутствует параметр 'ram_disk_size_gb' в секции deploy"
-        
-        # Проверка storage_path для каждого узла
+        # Проверка наличия секции nodes
         assert "nodes" in config, "Отсутствует секция 'nodes' в config.yaml"
         
+        # Проверка обязательных параметров для каждого узла
+        required_node_params = ["host", "user", "key_path", "storage", "storage_path"]
+        
         for node_name, node_conf in config["nodes"].items():
-            assert "storage_path" in node_conf, \
-                f"Узел '{node_name}' не содержит обязательный параметр 'storage_path'"
+            for param in required_node_params:
+                assert param in node_conf, \
+                    f"Узел '{node_name}' не содержит обязательный параметр '{param}'"
+            
+            # ram_disk_size_gb теперь опциональный (можно не указывать)
+            # Если указан - должен быть числом
+            if "ram_disk_size_gb" in node_conf:
+                assert isinstance(node_conf["ram_disk_size_gb"], (int, float)), \
+                    f"Узел '{node_name}': ram_disk_size_gb должен быть числом"
 
 
 if __name__ == "__main__":
